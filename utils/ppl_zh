@@ -1,0 +1,160 @@
+import argparse
+import re
+import jieba
+import nltk
+import numpy as np
+from nltk.collocations import *
+
+
+def cal_ppl_char(filepath):
+    """在字粒度计算困惑度"""
+    # 读取GPT2生成数据
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    #  分词
+    tokens = []
+    for line in lines:
+        temp_line_token = get_line_token(line)
+        tokens += temp_line_token
+
+    # Create uni-grams
+    ugs = nltk.ngrams(tokens, 1)
+    # Create bi-grams
+    bgs = nltk.ngrams(tokens, 2)
+
+    # compute frequency distribution
+    uni_dic = nltk.FreqDist(ugs)
+
+    uni_ppl_list = []
+    bi_ppl_list = []
+    total_num = sum(uni_dic.values())  # 单词的总数
+    V = len(uni_dic)  # token的总数
+
+    bi_finder = BigramCollocationFinder.from_words(tokens)
+
+    # print(uni_dic[tuple(['possible'])])
+
+    # 计算句子的PPL
+    for line in lines:
+        uni_tokens = []
+        uni_tokens += get_line_token(line)
+        N = len(uni_tokens)  # 这句话的长度
+        uni_sum_logp = 0
+        bi_sum_logp = uni_dic[tuple([uni_tokens[0]])] / float(total_num)
+        for token in uni_tokens:  # 计算uni-gram的概率
+            temp = uni_dic[tuple([token])]
+            uni_p = temp / float(total_num)
+            uni_sum_logp += np.log(uni_p)
+        for i in range(1, len(uni_tokens)):  # 计算bi-gram的概率
+            bi_p = (bi_finder.ngram_fd[(uni_tokens[i - 1], uni_tokens[i])] + 1) / (
+                    uni_dic[tuple([uni_tokens[i - 1]])] + V)
+            bi_sum_logp += np.log(bi_p)
+        uni_ppl_list.append(- uni_sum_logp / N)
+        bi_ppl_list.append(- bi_sum_logp / N)
+
+    ppl_uni = np.exp(np.mean(uni_ppl_list))
+    ppl_bi = np.exp(np.mean(bi_ppl_list))
+    return ppl_uni, ppl_bi
+
+
+def cal_ppl_word(filepath):
+    """在词粒度计算困惑度"""
+    # 读取GPT2生成数据
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    #  分词
+    jieba.load_userdict('../mengzi-t5-base/spiece.vocab')
+    tokens = []
+    for line in lines:
+        tokens += jieba.cut(line, cut_all=False)
+
+    for i in range(len(tokens)):
+        if tokens[i].isdigit():
+            tokens[i] = 'NUM'
+
+    # Create uni-grams
+    ugs = nltk.ngrams(tokens, 1)
+    # Create bi-grams
+    bgs = nltk.ngrams(tokens, 2)
+
+    # compute frequency distribution
+    uni_dic = nltk.FreqDist(ugs)
+    bi_dic = nltk.FreqDist(bgs)
+
+    uni_ppl_list = []
+    bi_ppl_list = []
+    total_num = sum(uni_dic.values())  # 单词的总数
+    V = len(uni_dic)  # token的总数
+
+    bi_finder = BigramCollocationFinder.from_words(tokens)
+
+    # print(uni_dic[tuple(['possible'])])
+
+    # 计算句子的PPL
+    for line in lines:
+        uni_tokens = []
+        uni_tokens += jieba.cut(line, cut_all=False)
+        for i in range(len(uni_tokens)):
+            if uni_tokens[i].isdigit():
+                uni_tokens[i] = 'NUM'
+        N = len(uni_tokens)  # 这句话的长度
+        uni_sum_logp = 0
+        bi_sum_logp = uni_dic[tuple([uni_tokens[0]])] / float(total_num)
+        for token in uni_tokens:  # 计算uni-gram的概率
+            temp = uni_dic[tuple([token])]
+            uni_p = temp / float(total_num)
+            uni_sum_logp += np.log(uni_p)
+        for i in range(1, len(uni_tokens)):  # 计算bi-gram的概率
+            bi_p = (bi_finder.ngram_fd[(uni_tokens[i - 1], uni_tokens[i])] + 1) / (
+                        uni_dic[tuple([uni_tokens[i - 1]])] + V)
+            bi_sum_logp += np.log(bi_p)
+        uni_ppl_list.append(- uni_sum_logp / N)
+        bi_ppl_list.append(- bi_sum_logp / N)
+
+    ppl_uni = np.exp(np.mean(uni_ppl_list))
+    ppl_bi = np.exp(np.mean(bi_ppl_list))
+    return ppl_uni, ppl_bi
+
+
+def get_line_token(textline):
+    """处理中文文本中的英文和数字"""
+    line_token = []
+    english = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    buffer = ''
+    for s in textline:
+        if s in english or s in english.upper():
+            buffer += s
+        else:
+            if buffer:
+                if buffer.isdigit():
+                    line_token.append('NUM')  # 将纯数字用"NUM"代替
+                else:
+                    line_token.append(buffer)
+            buffer = ''
+            line_token.append(s)
+    if buffer:
+        line_token.append(buffer)
+    return line_token
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--filepath', default='/common-data/new_build/xingrui.lou/Dul_attention_cvae/results/Dual-LVG.txt', type=str, required=False,
+                        help='数据位置')
+    parser.add_argument('--level', default='char', type=str, required=False,
+                        help='选择是在字粒度还是词粒度计算困惑度 (char/word)')
+    args = parser.parse_args()
+    if args.level == 'char':
+        ppl_uni, ppl_bi = cal_ppl_char(args.filepath)
+        print("字粒度PPL：")
+    elif args.level == 'word':
+        ppl_uni, ppl_bi = cal_ppl_word(args.filepath)
+        print("词粒度PPL：")
+    print("PPL (uni-gram):%.2f" % ppl_uni)
+    print("PPL (bi-gram):%.2f" % ppl_bi)
+
+
+if __name__ == '__main__':
+    main()
